@@ -61,7 +61,8 @@ class IntrusionDetectionSystem:
                 'source_node': node_name,
                 'action_taken': action,
                 'can_id': can_id,
-                'details': details
+                'details': details,
+                'alert_count': self.alert_counts.get(node_name, 0),
             })
 
     def inspect_frame(self, msg: can.Message) -> bool:

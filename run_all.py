@@ -2,11 +2,11 @@
 """
 run_all.py — Single entry point for the ADAS Network Security project.
 
-Starts all 5 ADAS nodes as threads, initializes the SQLite database,
-and launches the Flask dashboard on http://localhost:5000.
+Launches the Flask dashboard on http://localhost:5000 with messages stopped.
+Use Start Messages / Stop Messages in the dashboard to control the CAN nodes.
 
 Usage:
-    python run_all.py              # Start everything (dashboard + nodes)
+    python run_all.py              # Open dashboard; start messages using its controls
     python run_all.py --no-web     # Start nodes only (no dashboard)
     python run_all.py --port 8080  # Custom port
 
@@ -54,6 +54,8 @@ def main():
     def shutdown(signum=None, frame=None):
         logger.info("Shutting down all nodes...")
         stop_event.set()
+        if not args.no_web:
+            raise KeyboardInterrupt
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
@@ -99,13 +101,20 @@ def main():
         logger.info(f"  → http://localhost:{args.port}")
         logger.info("=" * 60)
 
-        # Import here to avoid eventlet monkey-patching in console mode
-        import eventlet
-        eventlet.monkey_patch()
-
-        from backend.app import app, socketio, start_nodes
-        start_nodes()
-        socketio.run(app, host='0.0.0.0', port=args.port, debug=False, use_reloader=False)
+        from backend.app import app, socketio, initialize_system, stop_nodes
+        initialize_system()
+        logger.info("Messages stopped. Click Start Messages in the dashboard to begin.")
+        try:
+            socketio.run(
+                app,
+                host='0.0.0.0',
+                port=args.port,
+                debug=False,
+                use_reloader=False,
+                allow_unsafe_werkzeug=True,
+            )
+        finally:
+            stop_nodes()
 
 
 if __name__ == '__main__':

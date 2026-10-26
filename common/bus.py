@@ -10,11 +10,27 @@ To use Linux socketcan instead, set environment variables:
 """
 
 import os
+import threading
+from contextlib import contextmanager
 import can
 
 # Defaults: pure-Python virtual bus (cross-platform)
 DEFAULT_INTERFACE = "virtual"
 DEFAULT_CHANNEL   = "adas"
+_bus_scope = threading.local()
+
+
+@contextmanager
+def managed_buses():
+    """Close every bus opened by this node thread when it stops or fails."""
+    previous = getattr(_bus_scope, 'buses', None)
+    _bus_scope.buses = []
+    try:
+        yield
+    finally:
+        for bus in _bus_scope.buses:
+            bus.shutdown()
+        _bus_scope.buses = previous
 
 
 def get_bus(**kwargs) -> can.BusABC:
@@ -30,9 +46,12 @@ def get_bus(**kwargs) -> can.BusABC:
     interface = os.environ.get("CAN_INTERFACE", DEFAULT_INTERFACE)
     channel   = os.environ.get("CAN_CHANNEL", DEFAULT_CHANNEL)
 
-    return can.interface.Bus(
+    bus = can.interface.Bus(
         channel=channel,
         interface=interface,
         is_extended_id=False,
         **kwargs,
     )
+    if getattr(_bus_scope, 'buses', None) is not None:
+        _bus_scope.buses.append(bus)
+    return bus

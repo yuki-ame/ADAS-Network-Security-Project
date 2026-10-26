@@ -13,10 +13,14 @@
 <body>
     <header>
         <h1>ADAS Network Security Dashboard</h1>
-        <div id="session-info">Session ID: <span id="current-session-id">Loading...</span></div>
     </header>
 
     <div class="control-bar panel">
+        <div class="message-controls" aria-label="Message transmission controls">
+            <button id="btn-messages-start" class="btn primary" disabled>Start Messages</button>
+            <button id="btn-messages-stop" class="btn secondary" disabled>Stop Messages</button>
+            <span id="messages-state" role="status">Connecting…</span>
+        </div>
         <div class="attack-controls">
             <label for="attack-mode">Attack Mode:</label>
             <select id="attack-mode">
@@ -28,7 +32,7 @@
             <label for="attack-rate">Rate (msg/s):</label>
             <input type="number" id="attack-rate" value="10" min="1" max="1000">
             
-            <button id="btn-launch" class="btn primary">Launch Attack</button>
+            <button id="btn-launch" class="btn primary" disabled>Launch Attack</button>
             <button id="btn-stop" class="btn danger" disabled>Stop Attack</button>
         </div>
         
@@ -41,47 +45,49 @@
         </div>
     </div>
 
-    <div class="row row-1">
+    <div class="row row-1" tabindex="0" role="region" aria-label="Road simulation and message rate; scroll horizontally on smaller screens">
+        <section class="road-simulation panel" aria-labelledby="road-title">
+            <div class="road-heading">
+                <h2 id="road-title">Road Simulation</h2>
+            </div>
+            <div class="road-telemetry">
+                <div><span class="road-metric-label">Speed <small>(model)</small></span><strong><span id="road-speed">65</span><small> km/h</small></strong></div>
+                <div><span class="road-metric-label">Brake ECU</span><strong><span id="road-brake">—</span><small> %</small></strong></div>
+                <div><span class="road-metric-label">Radar gap</span><strong><span id="road-distance">—</span><small> m</small></strong></div>
+            </div>
+            <div class="road-scene">
+                <canvas id="road-canvas" role="img" aria-label="Top-down ADAS road simulation. Waiting for sensor data."></canvas>
+                <button id="road-pause" class="road-pause" type="button" aria-pressed="false" aria-label="Pause road animation" title="Pause animation only">Pause</button>
+            </div>
+            <div class="road-status-line">
+                <span id="road-status" role="status">Waiting for telemetry</span>
+                <span id="road-security" class="road-security">IDS OFF</span>
+            </div>
+            <div id="road-detail" class="road-detail">Live radar, camera &amp; brakes · illustrative vehicle motion</div>
+        </section>
         <div class="chart-container panel">
             <h2>Message Rate (msgs/sec)</h2>
-            <canvas id="rateChart"></canvas>
-        </div>
-        <div class="chart-container panel">
-            <h2>Cumulative Alerts</h2>
-            <canvas id="alertChart"></canvas>
+            <div class="chart-plot"><canvas id="rateChart"></canvas></div>
         </div>
     </div>
 
     <div class="row row-2">
         <div class="nodes-grid panel">
             <h2>Node Status</h2>
-            <div class="node-cards">
-                <div class="node-card" id="card-radar">
-                    <div class="indicator"></div>
-                    <h3>Radar</h3>
-                    <div class="status-text">Active</div>
-                </div>
-                <div class="node-card" id="card-camera">
-                    <div class="indicator"></div>
-                    <h3>Camera</h3>
-                    <div class="status-text">Active</div>
-                </div>
-                <div class="node-card" id="card-adas_ecu">
-                    <div class="indicator"></div>
-                    <h3>ADAS ECU</h3>
-                    <div class="status-text">Active</div>
-                </div>
-                <div class="node-card" id="card-gateway">
-                    <div class="indicator"></div>
-                    <h3>Gateway</h3>
-                    <div class="status-text">Active</div>
-                </div>
-                <div class="node-card" id="card-brake_ecu">
-                    <div class="indicator"></div>
-                    <h3>Brake ECU</h3>
-                    <div class="status-text">Active</div>
-                </div>
-            </div>
+            <table class="node-table" aria-label="Node activity status">
+                <thead><tr><th scope="col">Node</th><th scope="col">Status</th></tr></thead>
+                <tbody>
+                    <tr id="node-radar"><th scope="row">Radar</th><td><span class="node-status is-inactive">Inactive</span></td></tr>
+                    <tr id="node-camera"><th scope="row">Camera</th><td><span class="node-status is-inactive">Inactive</span></td></tr>
+                    <tr id="node-adas_ecu"><th scope="row">ADAS ECU</th><td><span class="node-status is-inactive">Inactive</span></td></tr>
+                    <tr id="node-gateway"><th scope="row">Gateway</th><td><span class="node-status is-inactive">Inactive</span></td></tr>
+                    <tr id="node-brake_ecu"><th scope="row">Brake ECU</th><td><span class="node-status is-inactive">Inactive</span></td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="chart-container panel">
+            <h2>Cumulative Alerts</h2>
+            <div class="chart-plot"><canvas id="alertChart"></canvas></div>
         </div>
         <div class="stats-panel panel">
             <h2>Session Stats</h2>
@@ -92,11 +98,12 @@
 
     <div class="row row-3">
         <div class="log-panel panel">
-            <h2>Live Feed</h2>
+            <h2>Logs</h2>
             <div id="log-feed" class="log-feed"></div>
         </div>
     </div>
 
+    <script src="{{ url_for('static', filename='road-simulation.js') }}"></script>
     <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
 </body>
 </html>

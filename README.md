@@ -74,6 +74,10 @@ python run_all.py
 
 Open **http://localhost:5000** in your browser.
 
+The dashboard opens with CAN messages stopped. Click **Start Messages** to start the
+five ADAS nodes, and **Stop Messages** to stop them and any running attack. The web
+dashboard stays available, and messages can be started again without restarting Python.
+
 ### 3. Run Without Dashboard (Console Only)
 
 ```bash
@@ -156,6 +160,8 @@ All CAN data frames are exactly **8 bytes** (standard CAN constraint).
 
 | Control | Action |
 |---------|--------|
+| **Start Messages** | Start the five ADAS nodes and CAN message transmission |
+| **Stop Messages** | Stop all nodes and any running attack; keep the dashboard open |
 | **Attack Mode** dropdown | Select: Spoof / Replay / Flood |
 | **Rate** input | Frames/sec for flood mode |
 | **Launch Attack** | Start the selected attack |

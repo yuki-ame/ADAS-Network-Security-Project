@@ -5,9 +5,6 @@ Orchestrates all ADAS nodes, the attacker, and the IDS. Pushes real-time
 events to the browser via SocketIO and logs everything to SQLite.
 """
 
-import eventlet
-eventlet.monkey_patch()
-
 import os
 import sys
 import time
@@ -41,6 +38,7 @@ from attacker.attacker import run_attack
 
 # Import IDS (class-based API)
 from defense.ids import IntrusionDetectionSystem
+from common.bus import managed_buses
 
 # ──────────────────────────────────────────────
 # Logging
@@ -60,7 +58,7 @@ app = Flask(
     static_folder=os.path.join(os.path.dirname(__file__), '..', 'frontend', 'static'),
 )
 app.config['SECRET_KEY'] = 'adas-network-security-2025'
-socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins='*')
+socketio = SocketIO(app, async_mode='threading', cors_allowed_origins='*')
 
 # ──────────────────────────────────────────────
 # Global state
@@ -70,8 +68,12 @@ defense_enabled = False
 ids_instance = None              # IntrusionDetectionSystem
 attacker_stop_event = None       # threading.Event for stopping attacks
 attacker_thread = None           # Thread running the attack
+attacker_mode = None
 nodes_stop_event = threading.Event()
 nodes_started = False
+node_threads = []
+system_initialized = False
+lifecycle_lock = threading.RLock()
 
 # SocketIO batching (100ms intervals to avoid flooding the browser)
 message_batch = []
@@ -85,7 +87,7 @@ batch_lock = threading.Lock()
 def socket_batch_worker():
     """Drain message and alert queues and emit to all connected clients."""
     while True:
-        eventlet.sleep(0.1)
+        socketio.sleep(0.1)
         with batch_lock:
             msgs = message_batch[:]
             alts = alert_batch[:]
@@ -101,11 +103,13 @@ def socket_batch_worker():
 # ──────────────────────────────────────────────
 # Callbacks — called by nodes, gateway, attacker, and IDS
 # ──────────────────────────────────────────────
-def node_msg_callback(msg_data: dict):
+def node_msg_callback(msg_data: dict, stop_event=None):
     """
     Called by each node when it sends or processes a CAN frame.
     msg_data keys: node, can_id, seq, data_dict, timestamp, raw_bytes
     """
+    if stop_event is not None and stop_event.is_set():
+        return
     payload_hex = msg_data.get('raw_bytes', b'').hex()
     sender = msg_data.get('node', 'unknown')
     can_id = msg_data.get('can_id', 0)
@@ -134,7 +138,8 @@ def node_msg_callback(msg_data: dict):
         'data': msg_data.get('data_dict', {}),
     }
     with batch_lock:
-        message_batch.append(event)
+        if stop_event is None or not stop_event.is_set():
+            message_batch.append(event)
 
 
 def ids_alert_callback(alert_data: dict):
@@ -176,7 +181,8 @@ def ids_alert_callback(alert_data: dict):
     socketio.emit('node_status_update', {
         'node_name': alert_data['source_node'],
         'status': 'blocked' if alert_data['action_taken'] == 'isolated' else 'suspicious',
-        'alert_count': ids_instance.get_node_status(alert_data['source_node'])['alert_count'] if ids_instance else 0,
+        # The IDS callback already runs under its lock; do not reacquire it here.
+        'alert_count': alert_data.get('alert_count', 0),
     })
 
 
@@ -190,37 +196,143 @@ def gateway_ids_callback(can_msg):
 
 
 # ──────────────────────────────────────────────
-# System startup — init DB, start nodes
+# System initialization and explicit message-transmission controls
 # ──────────────────────────────────────────────
+def initialize_system():
+    """Prepare the database and event worker, leaving CAN traffic stopped."""
+    global system_initialized, current_session_id
+    with lifecycle_lock:
+        if system_initialized:
+            return
+        init_db()
+        current_session_id = create_session(defense_enabled, notes="Dashboard initialized; messages stopped")
+        for node in [NODE_RADAR, NODE_CAMERA, NODE_ADAS, NODE_GATEWAY, NODE_BRAKE]:
+            update_node_status(node, 'inactive')
+        socketio.start_background_task(socket_batch_worker)
+        system_initialized = True
+
+
+def get_simulation_state():
+    return {
+        'running': nodes_started,
+        'stopping': not nodes_started and any(thread.is_alive() for thread in node_threads),
+        'attack_mode': attacker_mode if attacker_thread and attacker_thread.is_alive() else None,
+        'defense_enabled': defense_enabled,
+    }
+
+
+def publish_simulation_state():
+    socketio.emit('simulation_state', get_simulation_state())
+
+
+def _run_node(target, stop_event, is_gateway=False):
+    with managed_buses():
+        callback = lambda data: node_msg_callback(data, stop_event)
+        kwargs = {'ids_callback': gateway_ids_callback} if is_gateway else {}
+        target(stop_event, callback, **kwargs)
+
+
 def start_nodes():
-    """Start all 5 ADAS nodes as daemon threads."""
-    global nodes_started, current_session_id
+    """Start one fresh set of nodes only after the user requests messages."""
+    global nodes_started, nodes_stop_event, node_threads, current_session_id
+    with lifecycle_lock:
+        initialize_system()
+        if nodes_started:
+            return get_simulation_state()
+        if any(thread.is_alive() for thread in node_threads):
+            raise RuntimeError("Previous nodes are still stopping. Try again shortly.")
+        if ids_instance:
+            ids_instance.reset_all()  # New node threads restart their sequence numbers.
+        nodes_stop_event = threading.Event()
+        current_session_id = create_session(defense_enabled, notes="Messages started")
+        node_threads = [
+            threading.Thread(target=_run_node, args=(target, nodes_stop_event, name == NODE_GATEWAY),
+                             daemon=True, name=name)
+            for name, target in [(NODE_RADAR, run_radar), (NODE_CAMERA, run_camera),
+                                 (NODE_ADAS, run_adas), (NODE_BRAKE, run_brake), (NODE_GATEWAY, run_gateway)]
+        ]
+        nodes_started = True
+        for thread in node_threads:
+            thread.start()
+        logger.info("Messages started: all 5 ADAS nodes running.")
+        socketio.emit('system_log', {'timestamp': time.time(), 'message': 'Messages started'})
+        publish_simulation_state()
+        return get_simulation_state()
 
-    if nodes_started:
-        return
 
-    init_db()
-    current_session_id = create_session(defense_enabled, notes="System startup")
+def _stop_attack():
+    global attacker_thread, attacker_mode
+    active = attacker_thread is not None and attacker_thread.is_alive()
+    if attacker_stop_event:
+        attacker_stop_event.set()
+    if active:
+        attacker_thread.join(timeout=3.0)
+        if attacker_thread.is_alive():
+            raise RuntimeError("The attack is still stopping. Try again shortly.")
+        socketio.emit('system_log', {'timestamp': time.time(), 'message': 'Attack stopped'})
+    attacker_thread = None
+    attacker_mode = None
+    return active
 
-    # Start batch worker
-    eventlet.spawn(socket_batch_worker)
 
-    # Start nodes
-    threading.Thread(target=run_radar,    args=(nodes_stop_event, node_msg_callback), daemon=True, name="radar").start()
-    threading.Thread(target=run_camera,   args=(nodes_stop_event, node_msg_callback), daemon=True, name="camera").start()
-    threading.Thread(target=run_adas,     args=(nodes_stop_event, node_msg_callback), daemon=True, name="adas_ecu").start()
-    threading.Thread(target=run_brake,    args=(nodes_stop_event, node_msg_callback), daemon=True, name="brake_ecu").start()
-    threading.Thread(target=run_gateway,  args=(nodes_stop_event, node_msg_callback),
-                     kwargs={'ids_callback': gateway_ids_callback}, daemon=True, name="gateway").start()
+def stop_nodes():
+    """Stop real CAN producers/consumers and attacks, then discard pending batches."""
+    global nodes_started
+    with lifecycle_lock:
+        was_running = nodes_started
+        nodes_started = False
+        nodes_stop_event.set()
+        _stop_attack()
+        deadline = time.monotonic() + 6.0
+        for thread in node_threads:
+            thread.join(timeout=max(0, deadline - time.monotonic()))
+        with batch_lock:
+            message_batch.clear()
+            alert_batch.clear()
+        for node in [NODE_RADAR, NODE_CAMERA, NODE_ADAS, NODE_GATEWAY, NODE_BRAKE]:
+            update_node_status(node, 'inactive')
+        if was_running:
+            logger.info("Messages stopped.")
+            socketio.emit('system_log', {'timestamp': time.time(), 'message': 'Messages stopped'})
+        publish_simulation_state()
+        return get_simulation_state()
 
-    nodes_started = True
-    logger.info("All 5 ADAS nodes started.")
-    socketio.emit('system_log', {'timestamp': time.time(), 'message': 'All nodes started'})
+
+def _run_attacker(mode, stop_event, rate):
+    with managed_buses():
+        run_attack(mode, stop_event, rate)
 
 
 # ──────────────────────────────────────────────
 # Routes
 # ──────────────────────────────────────────────
+@app.before_request
+def ensure_initialized():
+    initialize_system()
+
+
+@app.route('/api/simulation/status', methods=['GET'])
+def simulation_status():
+    return jsonify(get_simulation_state())
+
+
+@app.route('/api/simulation/start', methods=['POST'])
+def start_simulation():
+    try:
+        return jsonify(start_nodes())
+    except RuntimeError as error:
+        return jsonify({'error': str(error), **get_simulation_state()}), 409
+
+
+@app.route('/api/simulation/stop', methods=['POST'])
+def stop_simulation():
+    try:
+        return jsonify(stop_nodes())
+    except RuntimeError as error:
+        publish_simulation_state()
+        return jsonify({'error': str(error), **get_simulation_state()}), 409
+
+
 @app.route('/')
 def index():
     return render_template('dashboard.html')
@@ -245,11 +357,23 @@ def new_session():
 
 @app.route('/api/attack/start', methods=['POST'])
 def start_attack():
-    global attacker_stop_event, attacker_thread, current_session_id
+    global attacker_stop_event, attacker_thread, attacker_mode, current_session_id
+
+    with lifecycle_lock:
+        return _start_attack_locked()
+
+
+def _start_attack_locked():
+    global attacker_stop_event, attacker_thread, attacker_mode, current_session_id
+
+    if not nodes_started:
+        return jsonify({'error': 'Start Messages before launching an attack.'}), 409
 
     data = request.json or {}
     mode = data.get('mode', 'spoof')
     rate = data.get('rate', 5000)
+    if mode not in {'spoof', 'replay', 'flood'} or not isinstance(rate, int) or not 1 <= rate <= 10000:
+        return jsonify({'error': 'Choose a valid attack mode and rate (1–10000).'}), 400
 
     # Check if attack is already running
     if attacker_thread and attacker_thread.is_alive():
@@ -260,8 +384,9 @@ def start_attack():
 
     # Start the attack in a background thread
     attacker_stop_event = threading.Event()
+    attacker_mode = mode
     attacker_thread = threading.Thread(
-        target=run_attack,
+        target=_run_attacker,
         args=(mode, attacker_stop_event, rate),
         daemon=True,
         name=f"attacker-{mode}",
@@ -273,25 +398,30 @@ def start_attack():
         'timestamp': time.time(),
         'message': f'Attack started: {mode} (rate={rate} msg/s)'
     })
-    return jsonify({'status': 'Attack started', 'mode': mode, 'session_id': current_session_id})
+    publish_simulation_state()
+    return jsonify({'status': 'Attack started', 'mode': mode, 'session_id': current_session_id,
+                    **get_simulation_state()})
 
 
 @app.route('/api/attack/stop', methods=['POST'])
 def stop_attack():
-    global attacker_stop_event, attacker_thread
-
-    if attacker_stop_event and attacker_thread and attacker_thread.is_alive():
-        attacker_stop_event.set()
-        attacker_thread.join(timeout=3.0)
-        logger.info("Attack stopped.")
-        socketio.emit('system_log', {'timestamp': time.time(), 'message': 'Attack stopped'})
-        return jsonify({'status': 'Attack stopped'})
-
-    return jsonify({'status': 'No attack running'})
+    with lifecycle_lock:
+        try:
+            active = _stop_attack()
+            publish_simulation_state()
+            return jsonify({'status': 'Attack stopped' if active else 'No attack running',
+                            **get_simulation_state()})
+        except RuntimeError as error:
+            return jsonify({'error': str(error), **get_simulation_state()}), 409
 
 
 @app.route('/api/defense/toggle', methods=['POST'])
 def toggle_defense():
+    with lifecycle_lock:
+        return _toggle_defense_locked()
+
+
+def _toggle_defense_locked():
     global defense_enabled, ids_instance, current_session_id
 
     data = request.json or {}
@@ -316,11 +446,15 @@ def toggle_defense():
         'timestamp': time.time(),
         'message': f"IDS Defense {'ENABLED' if defense_enabled else 'DISABLED'}"
     })
+    publish_simulation_state()
     return jsonify({'status': 'Defense updated', 'enabled': defense_enabled, 'session_id': current_session_id})
 
 
 @app.route('/api/nodes/status', methods=['GET'])
 def get_nodes_status():
+    if not nodes_started:
+        return jsonify({name: {'status': 'inactive', 'alert_count': 0, 'last_seen': 0}
+                        for name in [NODE_RADAR, NODE_CAMERA, NODE_ADAS, NODE_GATEWAY, NODE_BRAKE]})
     if ids_instance:
         return jsonify(ids_instance.get_all_node_status())
     # Fallback: all active
@@ -358,7 +492,9 @@ def session_stats(session_id):
 # ──────────────────────────────────────────────
 @socketio.on('connect')
 def handle_connect():
+    initialize_system()
     logger.info("Browser client connected")
+    socketio.emit('simulation_state', get_simulation_state(), to=request.sid)
     socketio.emit('system_log', {
         'timestamp': time.time(),
         'message': f'Dashboard connected | Session: {current_session_id} | Defense: {"ON" if defense_enabled else "OFF"}'
@@ -368,7 +504,7 @@ def handle_connect():
 # Auto-initialize nodes if running under hosted WSGI/serverless environments
 if os.environ.get('VERCEL') or os.environ.get('RENDER'):
     try:
-        start_nodes()
+        initialize_system()
     except Exception as err:
         logger.warning(f"Could not auto-start nodes: {err}")
 
@@ -376,6 +512,13 @@ if os.environ.get('VERCEL') or os.environ.get('RENDER'):
 # Entry point
 # ──────────────────────────────────────────────
 if __name__ == '__main__':
-    start_nodes()
+    initialize_system()
     logger.info("Starting dashboard on http://localhost:5000")
-    socketio.run(app, host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+    socketio.run(
+        app,
+        host='0.0.0.0',
+        port=5000,
+        debug=False,
+        use_reloader=False,
+        allow_unsafe_werkzeug=True,
+    )

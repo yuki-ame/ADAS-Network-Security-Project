@@ -1,17 +1,19 @@
 :root {
-    --bg-color: #1a1a2e;
-    --panel-bg: #16213e;
-    --text-color: #e0e0e0;
-    --accent-blue: #0f3460;
-    --color-green: #00ffcc;
-    --color-yellow: #ffff00;
-    --color-red: #ff3333;
+    color-scheme: light;
+    --bg-color: #ffffff;
+    --panel-bg: #ffffff;
+    --text-color: #1f2937;
+    --border-color: #e2e8f0;
+    --muted-color: #64748b;
+    --color-green: #0f766e;
+    --color-yellow: #b45309;
+    --color-red: #dc2626;
 }
 
 body {
     background-color: var(--bg-color);
     color: var(--text-color);
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-family: Calibri, Candara, Arial, sans-serif;
     margin: 0;
     padding: 20px;
     box-sizing: border-box;
@@ -22,7 +24,7 @@ header {
     justify-content: space-between;
     align-items: center;
     margin-bottom: 20px;
-    border-bottom: 1px solid var(--accent-blue);
+    border-bottom: 1px solid var(--border-color);
     padding-bottom: 10px;
 }
 
@@ -34,7 +36,8 @@ h1, h2, h3 {
     background-color: var(--panel-bg);
     border-radius: 8px;
     padding: 15px;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+    border: 1px solid var(--border-color);
+    box-shadow: 0 3px 10px rgba(15,23,42,0.05);
     margin-bottom: 20px;
 }
 
@@ -42,18 +45,31 @@ h1, h2, h3 {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex-wrap: wrap;
+    gap: 15px;
 }
 
-.attack-controls, .defense-controls {
+.attack-controls, .defense-controls, .message-controls {
     display: flex;
     align-items: center;
     gap: 15px;
 }
+.attack-controls, .message-controls { flex-wrap: wrap; }
+.attack-controls { gap: 10px; }
+#attack-rate { width: 64px; box-sizing: border-box; }
+#messages-state { font-size: 0.85rem; color: var(--muted-color); }
+@media (max-width: 1100px) {
+    .message-controls { flex: 1; order: 0; }
+    .defense-controls { order: 1; }
+    .attack-controls { flex-basis: 100%; order: 2; }
+}
+
+button, select, input { font-family: inherit; }
 
 select, input[type="number"] {
-    background: #0f3460;
-    color: white;
-    border: 1px solid #2a2a4e;
+    background: #ffffff;
+    color: var(--text-color);
+    border: 1px solid #cbd5e1;
     padding: 8px;
     border-radius: 4px;
 }
@@ -68,65 +84,149 @@ select, input[type="number"] {
 }
 .btn:hover { opacity: 0.8; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn.primary { background-color: var(--color-green); color: #000; }
-.btn.danger { background-color: var(--color-red); color: #fff; }
+.btn.primary { background-color: var(--color-green); color: #fff; }
+.btn.secondary { background-color: #e2e8f0; color: #334155; }
+.btn.danger { background-color: #8b0000; color: #fff; }
+#btn-stop:disabled { opacity: 1; }
 
 .row {
     display: flex;
     gap: 20px;
 }
-.row-1 .chart-container {
-    flex: 1;
-    height: 300px;
+.row-1 {
+    overflow-x: auto;
 }
+.chart-container {
+    flex: 1;
+    min-width: 240px;
+    height: 300px;
+    display: flex;
+    flex-direction: column;
+}
+.chart-plot {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    margin-top: 12px;
+}
+
+/* Keep road simulation immediately to the left of message rate. */
+.row-1 .road-simulation {
+    flex: 1;
+    min-width: 300px;
+    height: 300px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.road-heading, .road-status-line {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.road-heading h2 { font-size: 1.1rem; }
+.road-telemetry {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+}
+.road-telemetry > div {
+    padding: 7px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 5px;
+    background: #f8fafc;
+}
+.road-metric-label {
+    display: block;
+    color: var(--muted-color);
+    font-size: 10px;
+    margin-bottom: 4px;
+    white-space: nowrap;
+}
+.road-telemetry strong { font-size: 17px; font-variant-numeric: tabular-nums; }
+.road-telemetry small { font-size: 9px; font-weight: normal; color: var(--muted-color); }
+.road-scene {
+    flex: 1;
+    min-height: 100px;
+    position: relative;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: #f1f5f3;
+}
+#road-canvas { display: block; width: 100%; height: 100%; }
+.road-pause {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    padding: 3px 6px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    color: var(--text-color);
+    background: #fffffff2;
+    font-size: 9px;
+    cursor: pointer;
+}
+.road-pause:hover { background: #f1f5f9; }
+.road-pause:focus-visible { outline: 2px solid var(--color-green); outline-offset: 2px; }
+.road-status-line { min-height: 20px; }
+#road-status { color: var(--color-green); font-size: 11px; font-weight: 700; }
+#road-status[data-tone="warning"] { color: var(--color-yellow); }
+#road-status[data-tone="danger"] { color: #b91c1c; }
+#road-status[data-tone="muted"] { color: var(--muted-color); }
+.road-security {
+    font-size: 9px;
+    white-space: nowrap;
+    border: 1px solid #cbd5e1;
+    padding: 3px 5px;
+    border-radius: 4px;
+    color: var(--muted-color);
+}
+.road-security.is-enabled { color: #1d4ed8; border-color: #93c5fd; background: #eff6ff; }
+.road-detail { font-size: 9px; line-height: 1.4; color: var(--muted-color); min-height: 25px; }
 
 .row-2 {
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: 180px minmax(230px, 1fr) 170px;
+    align-items: start;
+    overflow-x: auto;
 }
+.row-2 .chart-container { min-width: 0; }
 .nodes-grid {
-    flex: 3;
+    min-width: 0;
+    padding: 12px;
 }
-.node-cards {
-    display: flex;
-    gap: 15px;
-    margin-top: 15px;
-    flex-wrap: wrap;
+.nodes-grid h2 { font-size: 1.15rem; }
+.node-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 8px;
 }
-.node-card {
-    background: #0f3460;
-    border-radius: 6px;
-    padding: 15px;
-    flex: 1;
-    min-width: 120px;
-    text-align: center;
-    position: relative;
-    border: 1px solid transparent;
-    transition: all 0.3s ease;
+.node-table th, .node-table td {
+    padding: 5px 4px;
+    border-bottom: 1px solid var(--border-color);
+    text-align: left;
 }
-
-.node-card.status-active { border-color: var(--color-green); }
-.node-card.status-suspicious { border-color: var(--color-yellow); }
-.node-card.status-blocked { border-color: var(--color-red); }
-
-.indicator {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    margin: 0 auto 10px;
-    background: var(--color-green);
+.node-table thead th { background: #f8fafc; color: #475569; font-weight: 600; }
+.node-table tbody th { font-weight: 500; }
+.node-table tbody tr:last-child > * { border-bottom: 0; }
+.node-status {
+    display: inline;
+    font-size: 0.9rem;
+    font-weight: 400;
 }
-.status-suspicious .indicator { background: var(--color-yellow); }
-.status-blocked .indicator { background: var(--color-red); }
+.node-status.is-active, .node-status.is-inactive { color: inherit; background: none; }
 
 .stats-panel {
-    flex: 1;
-    min-width: 200px;
+    min-width: 0;
 }
 .stat-item {
-    font-size: 1.2rem;
+    font-size: 1rem;
     margin-top: 15px;
     padding: 10px;
-    background: #0f3460;
+    background: #f8fafc;
+    border: 1px solid var(--border-color);
     border-radius: 4px;
 }
 
@@ -136,17 +236,19 @@ select, input[type="number"] {
 .log-feed {
     height: 300px;
     overflow-y: auto;
-    font-family: 'Courier New', Courier, monospace;
+    font-family: inherit;
     font-size: 0.9em;
     margin-top: 15px;
-    background: #000;
+    background: #ffffff;
+    color: #334155;
+    border: 1px solid var(--border-color);
     padding: 10px;
     border-radius: 4px;
 }
 .log-entry { margin-bottom: 5px; }
-.log-entry.system { color: #88ccff; }
+.log-entry.system { color: #0369a1; }
 .log-entry.alert { color: var(--color-red); font-weight: bold; }
-.log-entry.info { color: #aaaaaa; }
+.log-entry.info { color: #475569; }
 
 /* Toggle Switch */
 .switch {

@@ -6,6 +6,9 @@ __pycache__/
 # Pytest cache
 .pytest_cache/
 
+# Local runtime logs and temporary test/install files
+.tmp/
+
 # SQLite databases & temp files
 *.db
 *.db-journal
