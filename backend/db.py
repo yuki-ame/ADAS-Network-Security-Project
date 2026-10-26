@@ -9,7 +9,10 @@ import csv
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from common.can_ids import NODE_RADAR, NODE_CAMERA, NODE_ADAS, NODE_GATEWAY, NODE_BRAKE
 
-DB_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'adas_network.db'))
+if os.environ.get('VERCEL'):
+    DB_FILE = '/tmp/adas_network.db'
+else:
+    DB_FILE = os.environ.get('DB_PATH', os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'adas_network.db')))
 SQL_FILE = os.path.join(os.path.dirname(__file__), 'models.sql')
 
 _local = threading.local()

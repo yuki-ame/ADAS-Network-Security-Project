@@ -1,0 +1,16 @@
+[project]
+name = "adas-network-security"
+version = "0.1.0"
+description = "Network Security for ADAS — A Simulation-Based Attack & Defense Framework for Automotive Networks"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "python-can>=4.0.0",
+    "flask>=3.0.0",
+    "flask-socketio>=5.0.0",
+    "cryptography>=43.0.0",
+    "eventlet>=0.35.0",
+]
+
+[tool.vercel]
+entrypoint = "backend.app:app"

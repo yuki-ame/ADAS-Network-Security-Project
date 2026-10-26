@@ -365,6 +365,13 @@ def handle_connect():
     })
 
 
+# Auto-initialize nodes if running under hosted WSGI/serverless environments
+if os.environ.get('VERCEL') or os.environ.get('RENDER'):
+    try:
+        start_nodes()
+    except Exception as err:
+        logger.warning(f"Could not auto-start nodes: {err}")
+
 # ──────────────────────────────────────────────
 # Entry point
 # ──────────────────────────────────────────────
