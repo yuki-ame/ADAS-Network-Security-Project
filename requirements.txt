@@ -1,0 +1,6 @@
+python-can==4.*
+flask==3.*
+flask-socketio==5.*
+cryptography==43.*
+eventlet==0.*
+pytest==8.*

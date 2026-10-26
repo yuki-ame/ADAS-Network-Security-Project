@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ADAS Network Security Dashboard</title>
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <!-- Socket.IO CDN -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header>
+        <h1>ADAS Network Security Dashboard</h1>
+        <div id="session-info">Session ID: <span id="current-session-id">Loading...</span></div>
+    </header>
+
+    <div class="control-bar panel">
+        <div class="attack-controls">
+            <label for="attack-mode">Attack Mode:</label>
+            <select id="attack-mode">
+                <option value="spoof">Spoof</option>
+                <option value="replay">Replay</option>
+                <option value="flood">Flood</option>
+            </select>
+            
+            <label for="attack-rate">Rate (msg/s):</label>
+            <input type="number" id="attack-rate" value="10" min="1" max="1000">
+            
+            <button id="btn-launch" class="btn primary">Launch Attack</button>
+            <button id="btn-stop" class="btn danger" disabled>Stop Attack</button>
+        </div>
+        
+        <div class="defense-controls">
+            <label class="switch">
+                <input type="checkbox" id="defense-toggle">
+                <span class="slider round"></span>
+            </label>
+            <span>IDS Defense</span>
+        </div>
+    </div>
+
+    <div class="row row-1">
+        <div class="chart-container panel">
+            <h2>Message Rate (msgs/sec)</h2>
+            <canvas id="rateChart"></canvas>
+        </div>
+        <div class="chart-container panel">
+            <h2>Cumulative Alerts</h2>
+            <canvas id="alertChart"></canvas>
+        </div>
+    </div>
+
+    <div class="row row-2">
+        <div class="nodes-grid panel">
+            <h2>Node Status</h2>
+            <div class="node-cards">
+                <div class="node-card" id="card-radar">
+                    <div class="indicator"></div>
+                    <h3>Radar</h3>
+                    <div class="status-text">Active</div>
+                </div>
+                <div class="node-card" id="card-camera">
+                    <div class="indicator"></div>
+                    <h3>Camera</h3>
+                    <div class="status-text">Active</div>
+                </div>
+                <div class="node-card" id="card-adas_ecu">
+                    <div class="indicator"></div>
+                    <h3>ADAS ECU</h3>
+                    <div class="status-text">Active</div>
+                </div>
+                <div class="node-card" id="card-gateway">
+                    <div class="indicator"></div>
+                    <h3>Gateway</h3>
+                    <div class="status-text">Active</div>
+                </div>
+                <div class="node-card" id="card-brake_ecu">
+                    <div class="indicator"></div>
+                    <h3>Brake ECU</h3>
+                    <div class="status-text">Active</div>
+                </div>
+            </div>
+        </div>
+        <div class="stats-panel panel">
+            <h2>Session Stats</h2>
+            <div class="stat-item">Messages: <span id="stat-msgs">0</span></div>
+            <div class="stat-item">Alerts: <span id="stat-alerts">0</span></div>
+        </div>
+    </div>
+
+    <div class="row row-3">
+        <div class="log-panel panel">
+            <h2>Live Feed</h2>
+            <div id="log-feed" class="log-feed"></div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+</html>
