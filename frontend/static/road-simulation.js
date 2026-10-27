@@ -12,7 +12,7 @@ const roadSimulation = (() => {
         relativeSpeed: 0, object: 0, confidence: 0, sceneObject: 0,
         brake: null, decision: 0, speed: 65, roadOffset: 0,
         radarAt: 0, brakeAt: 0, cameraAt: 0, objectAt: 0,
-        defense: false, attack: null, alert: null, shieldUntil: 0,
+        defense: false, attack: null, attackStartedAt: 0, alert: null, shieldUntil: 0,
         paused: matchMedia('(prefers-reduced-motion: reduce)').matches,
         width: 360, height: 160, lastFrame: 0, lastHud: 0,
     };
@@ -65,8 +65,14 @@ const roadSimulation = (() => {
 
     function receiveLog({ message = '' }) {
         const attackMatch = message.match(/Attack started:\s*(spoof|replay|flood)/i);
-        if (attackMatch) state.attack = attackMatch[1].toLowerCase();
-        if (message.includes('Attack stopped')) state.attack = null;
+        if (attackMatch) {
+            state.attack = attackMatch[1].toLowerCase();
+            state.attackStartedAt = performance.now();
+        }
+        if (message.includes('Attack stopped')) {
+            state.attack = null;
+            state.attackStartedAt = 0;
+        }
         if (/Defense:\s*ON|IDS Defense ENABLED/.test(message)) state.defense = true;
         if (/Defense:\s*OFF|IDS Defense DISABLED/.test(message)) {
             state.defense = false;
@@ -90,9 +96,14 @@ const roadSimulation = (() => {
             tone = 'muted';
         }
         else if (state.attack && !state.defense) {
-            status = state.attack === 'spoof' ? '💥 Collision hazard · Phantom brake'
-                   : state.attack === 'replay' ? '💥 Frontal crash · Blinded AEB'
-                   : '💥 Crash hazard · Bus flood';
+            const elapsed = state.attackStartedAt > 0 ? (now - state.attackStartedAt) / 1000 : 0;
+            if (state.attack === 'spoof') {
+                status = elapsed < 1.1 ? '⚠️ Phantom brake triggered!' : '💥 REAR-END COLLISION!';
+            } else if (state.attack === 'replay') {
+                status = elapsed < 1.4 ? '⚠️ Stale radar · Blinded AEB!' : '💥 FRONTAL COLLISION!';
+            } else {
+                status = elapsed < 1.4 ? '⚠️ CAN bus flood · High latency' : '💥 BRAKE STARVATION CRASH!';
+            }
             tone = 'danger';
         }
         else if (!brakeLive) { status = 'Brake telemetry stale'; tone = 'warning'; }
@@ -110,46 +121,6 @@ const roadSimulation = (() => {
         if (live && state.alert && now - state.alert.at < 3000) {
             const alert = state.alert;
             detail = `IDS: ${alert.alert_type.replace(/_/g, ' ')} · ${alert.action_taken} · ${alert.details || alert.source_node}`;
-        if (live && state.attack === 'spoof') {
-            const ghostX = Math.min(obstacleX, nose + 48);
-            ctx.save();
-            ctx.globalAlpha = state.paused ? 0.7 : 0.45 + Math.sin(now / 170) * 0.2;
-            ctx.strokeStyle = '#be185d'; ctx.setLineDash([4, 3]);
-            ctx.strokeRect(ghostX - 10, y - 19, 20, 38); ctx.setLineDash([]);
-            text('UNTRUSTED 2 m', ghostX, y - h * 0.24, '#9d174d', 7, 'center');
-            ctx.restore();
-
-            if (!state.defense) {
-                const followerX = egoX - 52;
-                car(followerX, y, '#e05252', true, false);
-                text('FOLLOWER', followerX, y + 29, '#b91c1c', 8, 'center');
-                drawCrashEffect(egoX - 28, y, now);
-                box(w / 2 - 130, h * 0.86, 260, 18, 4, '#7f1d1d', '#ef4444');
-                text('💥 REAR-END COLLISION! Phantom Brake at 0 km/h', w / 2, h * 0.95, '#fee2e2', 8, 'center');
-            }
-        }
-        if (live && state.attack === 'replay') {
-            if (!state.defense) {
-                drawCrashEffect(nose + 6, y, now);
-                box(w / 2 - 140, h * 0.86, 280, 18, 4, '#7f1d1d', '#ef4444');
-                text('💥 FRONTAL CRASH! Stale 18m Replay Blinded AEB', w / 2, h * 0.95, '#fee2e2', 8, 'center');
-            } else {
-                text('STALE FRAME INJECTION', w / 2, h * 0.96, '#92400e', 7, 'center');
-            }
-        }
-        if (live && state.attack === 'flood') {
-            if (!state.defense) {
-                drawCrashEffect(nose + 6, y, now);
-                box(w / 2 - 140, h * 0.86, 280, 18, 4, '#7f1d1d', '#ef4444');
-                text('💥 HIGH-SPEED CRASH! Bus Flooded · Brakes Starved', w / 2, h * 0.95, '#fee2e2', 8, 'center');
-            } else {
-                text('CAN FLOOD ACTIVE', w / 2, h * 0.96, '#7e22ce', 7, 'center');
-            }
-        }
-        if (live && state.attack && state.defense) {
-            box(w / 2 - 110, h * 0.86, 220, 18, 4, '#14532d', '#22c55e');
-            text('🛡️ CRASH PREVENTED BY IDS DEFENSE', w / 2, h * 0.95, '#dcfce7', 8, 'center');
-        }
         } else if (live && state.attack === 'spoof') {
             detail = state.defense
                 ? 'Spoof attempt: blocked by IDS HMAC · Safe cruise maintained'
@@ -231,21 +202,30 @@ const roadSimulation = (() => {
         ctx.restore();
     }
 
-    function drawCrashEffect(x, y, now) {
+    function drawCrashEffect(x, y, now, scale = 1) {
         ctx.save();
-        const pulse = Math.sin(now / 80);
-        ctx.strokeStyle = 'rgba(239, 68, 68, ' + (0.5 + Math.abs(pulse) * 0.4) + ')';
-        ctx.lineWidth = 3;
+        const pulse = Math.sin(now / 70);
+        // Expanding shockwave ring
+        ctx.strokeStyle = `rgba(239, 68, 68, ${clamp(0.6 + pulse * 0.4, 0, 1)})`;
+        ctx.lineWidth = 3 * scale;
         ctx.beginPath();
-        ctx.arc(x, y, 16 + Math.abs(pulse) * 10, 0, Math.PI * 2);
+        ctx.arc(x, y, (16 + Math.abs(pulse) * 12) * scale, 0, Math.PI * 2);
         ctx.stroke();
 
+        // Secondary fire/heat blast wave
+        ctx.strokeStyle = `rgba(251, 146, 60, ${clamp(0.5 + pulse * 0.3, 0, 1)})`;
+        ctx.lineWidth = 2 * scale;
+        ctx.beginPath();
+        ctx.arc(x, y, (9 + Math.abs(pulse) * 6) * scale, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Starburst spikes
         const spikes = 8;
         ctx.fillStyle = pulse > 0 ? '#ffcc00' : '#ff3b30';
         ctx.beginPath();
         for (let i = 0; i < spikes * 2; i++) {
-            const angle = (i * Math.PI) / spikes + (now / 350);
-            const radius = (i % 2 === 0) ? (14 + Math.abs(pulse) * 6) : (5 + Math.abs(pulse) * 3);
+            const angle = (i * Math.PI) / spikes + (now / 300);
+            const radius = ((i % 2 === 0) ? (16 + Math.abs(pulse) * 8) : (6 + Math.abs(pulse) * 4)) * scale;
             const px = x + Math.cos(angle) * radius;
             const py = y + Math.sin(angle) * radius;
             if (i === 0) ctx.moveTo(px, py);
@@ -254,9 +234,10 @@ const roadSimulation = (() => {
         ctx.closePath();
         ctx.fill();
 
+        // Core bright flash
         ctx.fillStyle = '#ffffff';
         ctx.beginPath();
-        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.arc(x, y, 5 * scale, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
     }
@@ -269,11 +250,31 @@ const roadSimulation = (() => {
         const gap = state.displayedDistance;
         const color = gap < 5 ? '#b91c1c' : gap < 10 ? '#b45309' : '#0f766e';
         const y = h * 0.56, egoX = Math.max(45, w * 0.18), nose = egoX + 29;
-        let obstacleX = nose + 38 + clamp(gap / 20, 0, 1) * Math.max(30, w - nose - 84);
+
+        const attackElapsed = (live && state.attack && state.attackStartedAt > 0)
+            ? (now - state.attackStartedAt) / 1000
+            : 0;
         const isAttacked = live && state.attack && !state.defense;
+
+        const normalObstacleX = nose + 38 + clamp(gap / 20, 0, 1) * Math.max(30, w - nose - 84);
+        let obstacleX = normalObstacleX;
+
         if (isAttacked && (state.attack === 'replay' || state.attack === 'flood')) {
-            obstacleX = nose + 14; // Frontal collision point
+            // Smoothly close distance from normal position to bumper impact over 1.4 seconds
+            const progress = clamp(attackElapsed / 1.4, 0, 1);
+            const ease = progress * progress;
+            obstacleX = normalObstacleX + ease * ((nose + 12) - normalObstacleX);
         }
+
+        let egoY = y;
+        if (isAttacked) {
+            if (state.attack === 'spoof' && attackElapsed >= 1.1 && attackElapsed <= 2.2) {
+                egoY += Math.sin(now / 25) * clamp(2.2 - attackElapsed, 0, 1) * 3;
+            } else if ((state.attack === 'replay' || state.attack === 'flood') && attackElapsed >= 1.4 && attackElapsed <= 2.5) {
+                egoY += Math.sin(now / 25) * clamp(2.5 - attackElapsed, 0, 1) * 3;
+            }
+        }
+
         const reach = Math.max(25, obstacleX - nose);
         ctx.clearRect(0, 0, w, h);
         ctx.fillStyle = '#eef4ef'; ctx.fillRect(0, 0, w, h);
@@ -296,27 +297,27 @@ const roadSimulation = (() => {
         if (gap < 5 && live && !state.paused) ctx.globalAlpha = 0.7 + Math.sin(now / 130) * 0.3;
         const beam = ctx.createLinearGradient(nose, 0, nose + reach, 0);
         beam.addColorStop(0, `${color}40`); beam.addColorStop(1, `${color}08`);
-        ctx.beginPath(); ctx.moveTo(nose, y);
-        ctx.lineTo(nose + reach, y - h * 0.17); ctx.lineTo(nose + reach, y + h * 0.17); ctx.closePath();
+        ctx.beginPath(); ctx.moveTo(nose, egoY);
+        ctx.lineTo(nose + reach, egoY - h * 0.17); ctx.lineTo(nose + reach, egoY + h * 0.17); ctx.closePath();
         ctx.fillStyle = beam; ctx.fill();
         ctx.strokeStyle = `${color}60`; ctx.lineWidth = 1;
         for (let i = 1; i <= 3; i++) {
             const r = reach * i / 3;
-            ctx.beginPath(); ctx.ellipse(nose, y, r, h * 0.17 * i / 3, 0, -0.95, 0.95); ctx.stroke();
+            ctx.beginPath(); ctx.ellipse(nose, egoY, r, h * 0.17 * i / 3, 0, -0.95, 0.95); ctx.stroke();
         }
         ctx.restore();
         if (braking && state.brake >= 100 && state.speed > 4) {
             ctx.strokeStyle = '#050a12b0'; ctx.lineWidth = 3;
             [-11, 11].forEach(offset => {
-                ctx.beginPath(); ctx.moveTo(egoX - 28, y + offset); ctx.lineTo(Math.max(0, egoX - 70), y + offset); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(egoX - 28, egoY + offset); ctx.lineTo(Math.max(0, egoX - 70), egoY + offset); ctx.stroke();
                 ctx.fillStyle = '#bac6d333';
                 for (let i = 0; i < 3; i++) {
-                    ctx.beginPath(); ctx.arc(egoX - 32 - i * 8, y + offset - i * 2, 3 + i * 2, 0, Math.PI * 2); ctx.fill();
+                    ctx.beginPath(); ctx.arc(egoX - 32 - i * 8, egoY + offset - i * 2, 3 + i * 2, 0, Math.PI * 2); ctx.fill();
                 }
             });
         }
-        car(egoX, y, '#20ada4', braking, true);
-        text('EGO / ADAS', egoX, y + 29, '#115e59', 8, 'center');
+        car(egoX, egoY, '#20ada4', braking, true);
+        text('EGO / ADAS', egoX, egoY + 29, '#115e59', 8, 'center');
         if (state.sceneObject === 1) car(obstacleX, y, '#7895b8');
         else if (state.sceneObject > 1) person(obstacleX, y, state.sceneObject === 3);
         else {
@@ -326,19 +327,84 @@ const roadSimulation = (() => {
         text(state.sceneObject ? objects[state.sceneObject].toUpperCase() : 'RADAR RETURN', obstacleX, y + 29, '#334155', 8, 'center');
         text(live ? `${gap.toFixed(1)} m` : 'NO LIVE DATA', (nose + obstacleX) / 2, y - h * 0.2, live ? color : '#64748b', 10, 'center');
         text('FORWARD →', 8, 13, '#4b6354', 7);
+
+        // Attack & Defense Overlays with smooth progression
         if (live && state.attack === 'spoof') {
             const ghostX = Math.min(obstacleX, nose + 48);
             ctx.save();
             ctx.globalAlpha = state.paused ? 0.7 : 0.45 + Math.sin(now / 170) * 0.2;
             ctx.strokeStyle = '#be185d'; ctx.setLineDash([4, 3]);
-            ctx.strokeRect(ghostX - 10, y - 19, 20, 38); ctx.setLineDash([]);
-            text('UNTRUSTED 2 m', ghostX, h * 0.96, '#9d174d', 7, 'center');
+            ctx.strokeRect(ghostX - 10, egoY - 19, 20, 38); ctx.setLineDash([]);
+            text('UNTRUSTED 2 m', ghostX, egoY - h * 0.24, '#9d174d', 7, 'center');
             ctx.restore();
+
+            if (!state.defense) {
+                // Smooth follower approach from offscreen left (egoX - 140) to egoX - 52 over 1.1s
+                const progress = clamp(attackElapsed / 1.1, 0, 1);
+                const ease = progress * progress;
+                const followerX = (egoX - 140) + ease * ((egoX - 52) - (egoX - 140));
+
+                const followerBraking = attackElapsed < 1.1 ? (Math.sin(now / 80) > 0) : true;
+                car(followerX, egoY, '#e05252', followerBraking, false);
+                text('FOLLOWER', followerX, egoY + 29, '#b91c1c', 8, 'center');
+
+                if (attackElapsed < 1.1) {
+                    box(w / 2 - 130, h * 0.86, 260, 18, 4, '#78350f', '#f59e0b');
+                    text('⚠️ PHANTOM BRAKE! Follower approaching rapidly...', w / 2, h * 0.95, '#fef3c7', 8, 'center');
+                } else {
+                    const impactIntensity = clamp(2.5 - attackElapsed, 0.6, 1.3);
+                    drawCrashEffect(egoX - 28, egoY, now, impactIntensity);
+                    box(w / 2 - 130, h * 0.86, 260, 18, 4, '#7f1d1d', '#ef4444');
+                    text('💥 REAR-END COLLISION! Follower struck phantom-braked car', w / 2, h * 0.95, '#fee2e2', 8, 'center');
+                }
+            }
         }
-        if (live && state.attack === 'replay') text('STALE FRAME INJECTION', w / 2, h * 0.96, '#92400e', 7, 'center');
-        if (live && state.attack === 'flood') text('CAN FLOOD ACTIVE', w / 2, h * 0.96, '#7e22ce', 7, 'center');
+        else if (live && state.attack === 'replay') {
+            if (!state.defense) {
+                if (attackElapsed < 1.4) {
+                    box(w / 2 - 130, h * 0.86, 260, 18, 4, '#78350f', '#f59e0b');
+                    text('⚠️ REPLAY INJECTION: ECU blinded · Hazard approaching!', w / 2, h * 0.95, '#fef3c7', 8, 'center');
+                } else {
+                    const impactIntensity = clamp(2.5 - attackElapsed, 0.6, 1.3);
+                    drawCrashEffect(nose + 6, egoY, now, impactIntensity);
+                    box(w / 2 - 140, h * 0.86, 280, 18, 4, '#7f1d1d', '#ef4444');
+                    text('💥 FRONTAL CRASH! Stale 18m Replay Blinded AEB', w / 2, h * 0.95, '#fee2e2', 8, 'center');
+                }
+            } else {
+                text('STALE FRAME INJECTION', w / 2, h * 0.96, '#92400e', 7, 'center');
+            }
+        }
+        else if (live && state.attack === 'flood') {
+            if (!state.defense) {
+                if (attackElapsed < 1.4) {
+                    ctx.save();
+                    ctx.strokeStyle = 'rgba(168, 85, 247, 0.4)';
+                    ctx.lineWidth = 1;
+                    for (let gl = 0; gl < 4; gl++) {
+                        const gy = h * (0.2 + (gl * 0.18) + (Math.sin(now / 50 + gl) * 0.05));
+                        ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke();
+                    }
+                    ctx.restore();
+                    box(w / 2 - 130, h * 0.86, 260, 18, 4, '#581c87', '#a855f7');
+                    text('⚠️ BUS FLOOD: 5000 msg/s · Brake commands starving...', w / 2, h * 0.95, '#f3e8ff', 8, 'center');
+                } else {
+                    const impactIntensity = clamp(2.5 - attackElapsed, 0.6, 1.3);
+                    drawCrashEffect(nose + 6, egoY, now, impactIntensity);
+                    box(w / 2 - 140, h * 0.86, 280, 18, 4, '#7f1d1d', '#ef4444');
+                    text('💥 HIGH-SPEED CRASH! Bus Flooded · Brakes Starved', w / 2, h * 0.95, '#fee2e2', 8, 'center');
+                }
+            } else {
+                text('CAN FLOOD ACTIVE', w / 2, h * 0.96, '#7e22ce', 7, 'center');
+            }
+        }
+
+        if (live && state.attack && state.defense) {
+            box(w / 2 - 110, h * 0.86, 220, 18, 4, '#14532d', '#22c55e');
+            text('🛡️ CRASH PREVENTED BY IDS DEFENSE', w / 2, h * 0.95, '#dcfce7', 8, 'center');
+        }
+
         if (live && now < state.shieldUntil) {
-            ctx.save(); ctx.translate(egoX, y);
+            ctx.save(); ctx.translate(egoX, egoY);
             ctx.strokeStyle = '#1d4ed8'; ctx.lineWidth = 2;
             ctx.shadowColor = '#52b9ff'; ctx.shadowBlur = 10;
             ctx.beginPath(); ctx.moveTo(0, -29); ctx.lineTo(39, -18); ctx.lineTo(35, 18);
@@ -385,6 +451,7 @@ const roadSimulation = (() => {
                 state.connected = true;
                 state.radarAt = state.brakeAt = state.cameraAt = 0;
                 state.attack = null;
+                state.attackStartedAt = 0;
             });
             socket.on('disconnect', () => { state.connected = false; });
             socket.on('simulation_state', data => {
@@ -395,11 +462,18 @@ const roadSimulation = (() => {
                 }
                 state.running = data.running;
                 state.defense = data.defense_enabled;
-                state.attack = data.attack_mode;
+                if (data.attack_mode && !state.attack) {
+                    state.attack = data.attack_mode;
+                    state.attackStartedAt = performance.now();
+                } else if (!data.attack_mode) {
+                    state.attack = null;
+                    state.attackStartedAt = 0;
+                }
                 if (!data.running) {
                     state.radarAt = state.brakeAt = state.cameraAt = 0;
                     state.alert = null;
                     state.shieldUntil = 0;
+                    state.attackStartedAt = 0;
                 }
             });
             socket.on('new_message_batch', receiveMessages);
