@@ -89,6 +89,12 @@ const roadSimulation = (() => {
             status = !state.connected ? 'Connection lost' : state.running === false ? 'Messages stopped' : 'Waiting for telemetry';
             tone = 'muted';
         }
+        else if (state.attack && !state.defense) {
+            status = state.attack === 'spoof' ? '💥 Collision hazard · Phantom brake'
+                   : state.attack === 'replay' ? '💥 Frontal crash · Blinded AEB'
+                   : '💥 Crash hazard · Bus flood';
+            tone = 'danger';
+        }
         else if (!brakeLive) { status = 'Brake telemetry stale'; tone = 'warning'; }
         else if (state.brake >= 100) { status = 'Emergency braking'; tone = 'danger'; }
         else if (state.brake > 0) { status = 'Caution · braking'; tone = 'warning'; }
@@ -104,12 +110,58 @@ const roadSimulation = (() => {
         if (live && state.alert && now - state.alert.at < 3000) {
             const alert = state.alert;
             detail = `IDS: ${alert.alert_type.replace(/_/g, ' ')} · ${alert.action_taken} · ${alert.details || alert.source_node}`;
+        if (live && state.attack === 'spoof') {
+            const ghostX = Math.min(obstacleX, nose + 48);
+            ctx.save();
+            ctx.globalAlpha = state.paused ? 0.7 : 0.45 + Math.sin(now / 170) * 0.2;
+            ctx.strokeStyle = '#be185d'; ctx.setLineDash([4, 3]);
+            ctx.strokeRect(ghostX - 10, y - 19, 20, 38); ctx.setLineDash([]);
+            text('UNTRUSTED 2 m', ghostX, y - h * 0.24, '#9d174d', 7, 'center');
+            ctx.restore();
+
+            if (!state.defense) {
+                const followerX = egoX - 52;
+                car(followerX, y, '#e05252', true, false);
+                text('FOLLOWER', followerX, y + 29, '#b91c1c', 8, 'center');
+                drawCrashEffect(egoX - 28, y, now);
+                box(w / 2 - 130, h * 0.86, 260, 18, 4, '#7f1d1d', '#ef4444');
+                text('💥 REAR-END COLLISION! Phantom Brake at 0 km/h', w / 2, h * 0.95, '#fee2e2', 8, 'center');
+            }
+        }
+        if (live && state.attack === 'replay') {
+            if (!state.defense) {
+                drawCrashEffect(nose + 6, y, now);
+                box(w / 2 - 140, h * 0.86, 280, 18, 4, '#7f1d1d', '#ef4444');
+                text('💥 FRONTAL CRASH! Stale 18m Replay Blinded AEB', w / 2, h * 0.95, '#fee2e2', 8, 'center');
+            } else {
+                text('STALE FRAME INJECTION', w / 2, h * 0.96, '#92400e', 7, 'center');
+            }
+        }
+        if (live && state.attack === 'flood') {
+            if (!state.defense) {
+                drawCrashEffect(nose + 6, y, now);
+                box(w / 2 - 140, h * 0.86, 280, 18, 4, '#7f1d1d', '#ef4444');
+                text('💥 HIGH-SPEED CRASH! Bus Flooded · Brakes Starved', w / 2, h * 0.95, '#fee2e2', 8, 'center');
+            } else {
+                text('CAN FLOOD ACTIVE', w / 2, h * 0.96, '#7e22ce', 7, 'center');
+            }
+        }
+        if (live && state.attack && state.defense) {
+            box(w / 2 - 110, h * 0.86, 220, 18, 4, '#14532d', '#22c55e');
+            text('🛡️ CRASH PREVENTED BY IDS DEFENSE', w / 2, h * 0.95, '#dcfce7', 8, 'center');
+        }
         } else if (live && state.attack === 'spoof') {
-            detail = 'Spoof attempt: untrusted 2 m echo · brakes follow the real ECU';
+            detail = state.defense
+                ? 'Spoof attempt: blocked by IDS HMAC · Safe cruise maintained'
+                : 'Spoof attempt: 💥 REAR-END CRASH HAZARD (Phantom brake at highway speed!)';
         } else if (live && state.attack === 'replay') {
-            detail = 'Replay active · stale radar frames injected onto the bus';
+            detail = state.defense
+                ? 'Replay active: 🛡️ Stale frame blocked by IDS Sequence check'
+                : 'Replay active: 💥 FRONTAL COLLISION (Blinded by replayed 18 m frame!)';
         } else if (live && state.attack === 'flood') {
-            detail = 'Flood active · watching live telemetry for delays';
+            detail = state.defense
+                ? 'Flood active: 🛡️ Throttled by IDS Rate Limiter'
+                : 'Flood active: 💥 HIGH-SPEED CRASH (CAN bus saturated · Brake command starved!)';
         }
         if (!live) detail = 'Motion held until fresh radar telemetry arrives.';
         if (state.connected && state.running === false) detail = 'Press Start Messages to begin the road simulation.';
@@ -179,6 +231,36 @@ const roadSimulation = (() => {
         ctx.restore();
     }
 
+    function drawCrashEffect(x, y, now) {
+        ctx.save();
+        const pulse = Math.sin(now / 80);
+        ctx.strokeStyle = 'rgba(239, 68, 68, ' + (0.5 + Math.abs(pulse) * 0.4) + ')';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(x, y, 16 + Math.abs(pulse) * 10, 0, Math.PI * 2);
+        ctx.stroke();
+
+        const spikes = 8;
+        ctx.fillStyle = pulse > 0 ? '#ffcc00' : '#ff3b30';
+        ctx.beginPath();
+        for (let i = 0; i < spikes * 2; i++) {
+            const angle = (i * Math.PI) / spikes + (now / 350);
+            const radius = (i % 2 === 0) ? (14 + Math.abs(pulse) * 6) : (5 + Math.abs(pulse) * 3);
+            const px = x + Math.cos(angle) * radius;
+            const py = y + Math.sin(angle) * radius;
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+    }
+
     function draw(now) {
         const w = state.width, h = state.height;
         if (!w || !h) return;
@@ -187,7 +269,11 @@ const roadSimulation = (() => {
         const gap = state.displayedDistance;
         const color = gap < 5 ? '#b91c1c' : gap < 10 ? '#b45309' : '#0f766e';
         const y = h * 0.56, egoX = Math.max(45, w * 0.18), nose = egoX + 29;
-        const obstacleX = nose + 38 + clamp(gap / 20, 0, 1) * Math.max(30, w - nose - 84);
+        let obstacleX = nose + 38 + clamp(gap / 20, 0, 1) * Math.max(30, w - nose - 84);
+        const isAttacked = live && state.attack && !state.defense;
+        if (isAttacked && (state.attack === 'replay' || state.attack === 'flood')) {
+            obstacleX = nose + 14; // Frontal collision point
+        }
         const reach = Math.max(25, obstacleX - nose);
         ctx.clearRect(0, 0, w, h);
         ctx.fillStyle = '#eef4ef'; ctx.fillRect(0, 0, w, h);
